@@ -21,6 +21,7 @@ from ._base_classification import _BaseStackingClassifier
 
 
 class StackingClassifier(_BaseXComposition, _BaseStackingClassifier, TransformerMixin):
+
     """A Stacking classifier for scikit-learn estimators for classification.
 
     Parameters
@@ -141,7 +142,7 @@ class StackingClassifier(_BaseXComposition, _BaseStackingClassifier, Transformer
     def named_classifiers(self):
         return _name_estimators(self.classifiers)
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, eval_set=None):
         """Fit ensemble classifers and the meta-classifier.
 
         Parameters
@@ -198,22 +199,37 @@ class StackingClassifier(_BaseXComposition, _BaseStackingClassifier, Transformer
                 else:
                     clf.fit(X, y, sample_weight=sample_weight)
 
-        meta_features = self.predict_meta_features(X)
+
+        def get_meta_features(X):
+            meta_features = self.predict_meta_features(X)
+            if not self.use_features_in_secondary:
+                # meta model uses the prediction outcomes only
+                pass
+            elif sparse.issparse(X):
+                meta_features = sparse.hstack((X, meta_features))
+            else:
+                meta_features = np.hstack((X, meta_features))
+
+            return meta_features
+
+        if eval_set is not None:
+            if isinstance(eval_set, tuple):
+                eval_set_ = (get_meta_features(eval_set[0]), eval_set[1])
+            elif isinstance(eval_set, list):
+                eval_set_ = []
+                for subset in eval_set:
+                    eval_set_.append((get_meta_features(subset[0]), subset[1]))
+            eval_set = eval_set_
+
+        meta_features = get_meta_features(X)
 
         if self.store_train_meta_features:
             self.train_meta_features_ = meta_features
 
-        if not self.use_features_in_secondary:
-            pass
-        elif sparse.issparse(X):
-            meta_features = sparse.hstack((X, meta_features))
-        else:
-            meta_features = np.hstack((X, meta_features))
-
         if sample_weight is None:
-            self.meta_clf_.fit(meta_features, y)
+            self.meta_clf_.fit(meta_features, y, eval_set=eval_set)
         else:
-            self.meta_clf_.fit(meta_features, y, sample_weight=sample_weight)
+            self.meta_clf_.fit(meta_features, y, sample_weight=sample_weight, eval_set=eval_set)
 
         return self
 

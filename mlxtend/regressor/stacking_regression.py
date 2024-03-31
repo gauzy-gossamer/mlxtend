@@ -19,6 +19,7 @@ from ..utils.base_compostion import _BaseXComposition
 
 
 class StackingRegressor(_BaseXComposition, RegressorMixin, TransformerMixin):
+
     """A Stacking regressor for scikit-learn estimators for regression.
 
     Parameters
@@ -115,7 +116,7 @@ class StackingRegressor(_BaseXComposition, RegressorMixin, TransformerMixin):
     def named_regressors(self):
         return _name_estimators(self.regressors)
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, sample_weight=None, eval_set=None, **params):
         """Learn weight coefficients from training data for each regressor.
 
         Parameters
@@ -157,40 +158,51 @@ class StackingRegressor(_BaseXComposition, RegressorMixin, TransformerMixin):
         if self.verbose > 0:
             print("Fitting %d regressors..." % (len(self.regressors)))
 
-        for regr in self.regr_:
-            if self.verbose > 0:
-                i = self.regr_.index(regr) + 1
-                print(
-                    "Fitting regressor%d: %s (%d/%d)"
-                    % (i, _name_estimators((regr,))[0][0], i, len(self.regr_))
-                )
+        if self.refit:
+            for regr in self.regr_:
+                if self.verbose > 0:
+                    i = self.regr_.index(regr) + 1
+                    print(
+                        "Fitting regressor%d: %s (%d/%d)"
+                        % (i, _name_estimators((regr,))[0][0], i, len(self.regr_))
+                    )
 
-            if self.verbose > 2:
-                if hasattr(regr, "verbose"):
-                    regr.set_params(verbose=self.verbose - 2)
+                if self.verbose > 2:
+                    if hasattr(regr, "verbose"):
+                        regr.set_params(verbose=self.verbose - 2)
 
-            if self.verbose > 1:
-                print(_name_estimators((regr,))[0][1])
+                if self.verbose > 1:
+                    print(_name_estimators((regr,))[0][1])
 
-            if sample_weight is None:
-                regr.fit(X, y)
+                if sample_weight is None:
+                    regr.fit(X, y)
+                else:
+                    regr.fit(X, y, sample_weight=sample_weight)
+
+        def get_meta_features(X):
+            meta_features = self.predict_meta_features(X)
+            if not self.use_features_in_secondary:
+                # meta model uses the prediction outcomes only
+                pass
+            elif sparse.issparse(X):
+                meta_features = sparse.hstack((X, meta_features))
             else:
-                regr.fit(X, y, sample_weight=sample_weight)
+                meta_features = np.hstack((X, meta_features))
 
-        meta_features = self.predict_meta_features(X)
+            return meta_features
 
-        if not self.use_features_in_secondary:
-            # meta model uses the prediction outcomes only
-            pass
-        elif sparse.issparse(X):
-            meta_features = sparse.hstack((X, meta_features))
-        else:
-            meta_features = np.hstack((X, meta_features))
+        if eval_set is not None:
+            if isinstance(eval_set, tuple):
+                eval_set_ = (get_meta_features(eval_set[0]), eval_set[1])
+            elif isinstance(eval_set, list):
+                eval_set_ = []
+                for subset in eval_set:
+                    eval_set_.append((get_meta_features(subset[0]), subset[1]))
+            eval_set = eval_set_
 
-        if sample_weight is None:
-            self.meta_regr_.fit(meta_features, y)
-        else:
-            self.meta_regr_.fit(meta_features, y, sample_weight=sample_weight)
+        meta_features = get_meta_features(X)
+
+        self.meta_regr_.fit(meta_features, y, eval_set=eval_set)
 
         # save meta-features for training data
         if self.store_train_meta_features:
